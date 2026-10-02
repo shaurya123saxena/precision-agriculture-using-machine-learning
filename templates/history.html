@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+{% block title %}Prediction History{% endblock %}
+{% block body %}
+
+<div class="hero-page">
+  <div class="hero-content">
+    <span class="hero-badge"><i class="fa-solid fa-clock-rotate-left fa-sm"></i> &nbsp;Analysis Log</span>
+    <h1 style="font-size:2.2rem;">Prediction History</h1>
+    <p>All your past crop, fertilizer, and disease analyses — stored securely.</p>
+  </div>
+</div>
+
+<nav class="page-nav">
+  <div class="page-nav-inner">
+    <a href="{{ url_for('dashboard') }}"><i class="fa-solid fa-gauge fa-xs"></i> Dashboard</a>
+    <a href="{{ url_for('crop_recommend') }}"><i class="fa-solid fa-wheat-awn fa-xs"></i> Crop</a>
+    <a href="{{ url_for('fertilizer_recommendation') }}"><i class="fa-solid fa-flask fa-xs"></i> Fertilizer</a>
+    <a href="{{ url_for('disease_prediction') }}"><i class="fa-solid fa-microscope fa-xs"></i> Disease</a>
+    <a href="{{ url_for('history') }}" class="active"><i class="fa-solid fa-clock-rotate-left fa-xs"></i> History</a>
+    <a href="{{ url_for('logout') }}" class="nav-logout"><i class="fa-solid fa-right-from-bracket fa-xs"></i> Logout</a>
+  </div>
+</nav>
+
+<div class="container" style="padding:3rem 1rem;">
+
+  {% if records.items %}
+  <div class="card-agro" style="overflow:hidden; margin-bottom:2rem;">
+    <div class="table-responsive">
+      <table class="tbl-agro">
+        <thead>
+          <tr>
+            <th style="width:130px">Type</th>
+            <th>Result</th>
+            <th style="width:140px">Confidence</th>
+            <th style="width:160px">Date &amp; Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in records.items %}
+          <tr>
+            <td>
+              <span class="badge-agro badge-{{ r.prediction_type }}">
+                {% if r.prediction_type == 'crop' %}<i class="fa-solid fa-wheat-awn fa-xs"></i>
+                {% elif r.prediction_type == 'fertilizer' %}<i class="fa-solid fa-flask fa-xs"></i>
+                {% else %}<i class="fa-solid fa-microscope fa-xs"></i>{% endif %}
+                {{ r.prediction_type | title }}
+              </span>
+            </td>
+            <td style="font-weight:600;">
+              {{ r.result | replace('___', ' — ') | replace('_', ' ') | title }}
+            </td>
+            <td>
+              {% if r.confidence %}
+              <div style="display:flex; align-items:center; gap:8px;">
+                <div class="prog-bar" style="flex:1; height:8px;">
+                  <div class="prog-fill prog-blue" style="width:{{ r.confidence }}%;"></div>
+                </div>
+                <span style="font-size:0.8rem; font-weight:700; color:var(--blue); white-space:nowrap;">{{ r.confidence }}%</span>
+              </div>
+              {% else %}
+              <span style="color:var(--text-muted);">—</span>
+              {% endif %}
+            </td>
+            <td style="color:var(--text-muted); font-size:0.83rem;">
+              {{ r.created_at.strftime('%d %b %Y') }}<br>
+              <span style="color:var(--text-muted); font-size:0.76rem;">{{ r.created_at.strftime('%H:%M UTC') }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  {% if records.pages > 1 %}
+  <nav>
+    <ul class="pagination justify-content-center">
+      {% if records.has_prev %}
+      <li class="page-item">
+        <a class="page-link" href="{{ url_for('history', page=records.prev_num) }}">← Prev</a>
+      </li>
+      {% endif %}
+      {% for p in records.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+        {% if p %}
+        <li class="page-item {% if p == records.page %}active{% endif %}">
+          <a class="page-link" href="{{ url_for('history', page=p) }}">{{ p }}</a>
+        </li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+        {% endif %}
+      {% endfor %}
+      {% if records.has_next %}
+      <li class="page-item">
+        <a class="page-link" href="{{ url_for('history', page=records.next_num) }}">Next →</a>
+      </li>
+      {% endif %}
+    </ul>
+  </nav>
+  {% endif %}
+
+  {% else %}
+  <div style="text-align:center; padding:5rem 1rem; color:var(--text-muted);">
+    <i class="fa-solid fa-seedling" style="font-size:3.5rem; color:var(--mint); margin-bottom:1rem;"></i>
+    <p style="font-size:1.1rem; font-weight:600;">No predictions yet!</p>
+    <p style="font-size:0.9rem; margin-bottom:1.5rem;">Use the tools below to make your first AI-powered analysis.</p>
+    <a href="{{ url_for('dashboard') }}" class="btn-agro btn-agro-primary">
+      <i class="fa-solid fa-gauge"></i> Go to Dashboard
+    </a>
+  </div>
+  {% endif %}
+
+</div>
+
+{% endblock %}
