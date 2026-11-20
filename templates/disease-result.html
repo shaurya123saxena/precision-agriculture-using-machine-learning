@@ -57,6 +57,9 @@
         <div class="col-sm py-2 py-md-3">
             <div class="card card-body" style="justify-content: center; background-color:white">
                 <p class="text-center" style="color: green; font-size: 22px; font-weight: bold;">{{ prediction }}</p>
+                {% if confidence %}
+                <p class="text-center text-muted">Model confidence: {{ confidence }}%</p>
+                {% endif %}
             </div>
         </div>
     </div>

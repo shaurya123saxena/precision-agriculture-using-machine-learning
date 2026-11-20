@@ -78,7 +78,6 @@
         <div class="col-md-8">
             <div class="result-card text-center">
 
-```
             <h2 class="text-success">
                 🌱 Recommended Crop: <b>{{ prediction }}</b>
             </h2>
@@ -91,6 +90,10 @@
             <p>
                 🔍 Confidence: <b>{{ confidence }}%</b>
             </p>
+
+            {% if weather_note %}
+            <p class="text-muted small">{{ weather_note }}</p>
+            {% endif %}
 
             <!-- ✅ Top 3 Recommendations -->
             <div class="mt-4">

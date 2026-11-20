@@ -2,3 +2,7 @@ venv/
 cultivai-original-source/
 *.db
 .DS_Store
+__pycache__/
+*.pyc
+.env
+.claude/

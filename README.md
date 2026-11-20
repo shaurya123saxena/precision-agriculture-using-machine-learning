@@ -1,46 +1,68 @@
-# Precision Agriculture using Machine Learning and IOT
+# CultivAI: Precision Agriculture with Machine Learning
 
-## DATA SOURCE 📊
-- [Crop recommendation dataset ](https://www.kaggle.com/atharvaingle/crop-recommendation-dataset) (custom built dataset)
-- [Fertilizer suggestion dataset](https://github.com/Gladiator07/Harvestify/blob/master/Data-processed/fertilizer.csv) (custom built dataset)
-- [Disease detection dataset](https://www.kaggle.com/vipoooool/new-plant-diseases-dataset)
+A Flask web app that helps farmers decide what to grow and how to care for it:
 
-## MOTIVATION 💪
-Farming is one of the major sectors that influences a country’s economic growth.
+- **Crop recommendation:** enter soil nutrients (N, P, K), pH, rainfall and your city. The app fetches live temperature and humidity and a RandomForest model recommends the best crop, with its top 3 alternatives and confidence.
+- **Fertilizer suggestion:** compares your soil's N-P-K with what the chosen crop needs and suggests how to correct it.
+- **Plant disease detection:** upload a leaf photo and a ResNet9 CNN identifies the crop and disease (38 classes), with the cause and treatment advice.
 
- -  In country like India, majority of the population is dependent on agriculture for their livelihood. Many new technologies, such as Machine Learning and Deep Learning, are being implemented into agriculture so that it is easier for farmers to grow and maximize their yield.
+Users sign up and log in (passwords hashed with bcrypt) before using the tools.
 
- -   In this project, I present a website in which the following applications are implemented; Crop recommendation, Fertilizer recommendation and Plant disease prediction, respectively.
+![Home page](Project-docs/App-snaps/Home.png)
 
- -  In the crop recommendation application, the user can provide the soil data from their side and the application will predict which crop should the user grow.
+## What this version changes
 
-  -   For the fertilizer recommendation application, the user can input the soil data and the type of crop they are growing, and the application will predict what the soil lacks or has excess of and will recommend improvements.
+This project builds on [precision-agriculture-using-machine-learning](https://github.com/atharval1/precision-agriculture-using-machine-learning) by Atharva Labhasetwar, Venkata Narayana Bommanaboina and Kundan Patil. Changes in this version:
 
-  -   For the last application, that is the plant disease prediction application, the user can input an image of a diseased plant leaf, and the application will predict what disease it is and will also give a little background about the disease and suggestions to cure it.
+- **Retrained crop model** ([train_model.py](train_model.py)): a RandomForest (300 trees, max depth 12) trained on an 80/20 split of the 2,200-row dataset. It scores 100% on the 440 held-out rows; this dataset is known to be easy to separate.
+- **Better crop results page:** confidence score and top 3 recommendations, plus range inputs (e.g. `40-60` is read as 50) and validation of every field.
+- **Disease detection fixed:** inference now uses the same preprocessing the ResNet9 was trained with, converts uploads to RGB, and shows the model's confidence. An unreadable file shows a friendly error instead of crashing.
+- **Weather made transparent:** if live weather is unavailable (no API key, unknown city or network error), the app uses typical values and says so on the results page.
+- **No secrets in the code:** the API key, Flask secret key and database URL come from environment variables. The database file is no longer tracked; the app creates it on first run.
+- Login is required for the crop recommendation page, and a broken `/display` route was removed.
 
-  
-## Contributors:
+## Run it
 
--[Atharva Labhasetwar](https://www.linkedin.com/in/atharva-labhasetwar)
+```bash
+python -m venv venv
+source venv/bin/activate              # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
--[Venkata Narayana Bommanaboina](https://www.linkedin.com/in/bvnarayana515739/)
+export WEATHER_API_KEY=your_key       # free key from https://openweathermap.org/api
+export SECRET_KEY=any-long-random-string
+python app.py                         # http://127.0.0.1:8000
+```
 
--[Kundan Patil](https://www.linkedin.com/in/kundan-patil-638979199)
+Without `WEATHER_API_KEY` the app still works, using typical weather values (25°C, 60% humidity) and saying so on the results page.
 
+To retrain the crop model: `python train_model.py` (writes `models/new_model.pkl` and prints the test accuracy).
 
-## Home Page of our WebApplication
-![Home Page of our WebApplication](https://github.com/atharval1/precision-agriculture-using-machine-learning/blob/main/Project-docs/App-snaps/Home.png)
+## How it works
 
+| Feature | Model / logic | Input | Data |
+|---|---|---|---|
+| Crop recommendation | RandomForest classifier, 22 crops | N, P, K, pH, rainfall + live temperature and humidity | [Crop recommendation dataset](https://www.kaggle.com/atharvaingle/crop-recommendation-dataset) |
+| Fertilizer suggestion | Rule-based: largest N/P/K gap against the crop's ideal | Crop name, soil N, P, K | [fertilizer.csv](Data/fertilizer.csv) |
+| Disease detection | ResNet9 CNN, 38 classes, 256×256 input | Leaf image | [New Plant Diseases dataset](https://www.kaggle.com/vipoooool/new-plant-diseases-dataset) |
 
-## How to use 💻
-- Crop Recommendation system ==> enter the corresponding nutrient values of your soil, state and city. Note that, the N-P-K (Nitrogen-Phosphorous-Pottasium) values to be entered should be the ratio between them. Refer this website for more information. Note: When you enter the city name, make sure to enter mostly common city names. Remote cities/towns may not be available in the Weather API from where humidity, temperature data is fetched.
+| Path | Purpose |
+|---|---|
+| `app.py` | Flask routes, authentication, model loading and inference |
+| `config.py` | Settings from environment variables |
+| `train_model.py` | Trains and saves the crop recommendation model |
+| `utils/model.py` | ResNet9 architecture |
+| `utils/disease.py`, `utils/fertilizer.py` | Disease descriptions and fertilizer advice text |
+| `models/` | Trained models |
+| `templates/`, `static/` | Pages, styles and images |
 
-- Fertilizer suggestion system ==> Enter the nutrient contents of your soil and the crop you want to grow. The algorithm will tell which nutrient the soil has excess of or lacks. Accordingly, it will give suggestions for buying fertilizers.
+## Known limitations
 
-- Disease Detection System ==> Upload an image of leaf of your plant. The algorithm will tell the crop type and whether it is diseased or healthy. If it is diseased, it will tell you the cause of the disease and suggest you how to prevent/cure the disease accordingly. Note that, for now it only supports few crops.
+- Admin accounts can be registered by anyone through `/reg`, and any logged-in user can open the admin dashboard. Proper role checks are the next fix.
+- The disease model only knows the 14 crops in its training set and expects a single, clear leaf photo.
+- Fertilizer advice only looks at the single largest nutrient gap.
 
-##How to Run project
-- please check my youtube link https://youtu.be/kU0nf-rzusE
-- https://www.youtube.com/watch?v=eJ-KytG2H5w&t=36s
+## Credits
 
-
+- Original project: [Atharva Labhasetwar](https://www.linkedin.com/in/atharva-labhasetwar), [Venkata Narayana Bommanaboina](https://www.linkedin.com/in/bvnarayana515739/), [Kundan Patil](https://www.linkedin.com/in/kundan-patil-638979199)
+- Datasets: Crop recommendation (Atharva Ingle, Kaggle), fertilizer data ([Harvestify](https://github.com/Gladiator07/Harvestify)), New Plant Diseases (Kaggle)
+- Weather data: [OpenWeatherMap](https://openweathermap.org/)

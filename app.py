@@ -23,7 +23,9 @@ from utils.disease import disease_dic
 
 # -------------------------LOADING THE TRAINED MODELS -----------------------------------------------
 
-# Loading crop recommendation model
+# Loading crop recommendation model (trained by train_model.py)
+CROP_FEATURES = ['N', 'P', 'K', 'temperature', 'humidity', 'ph', 'rainfall']
+DEFAULT_TEMPERATURE, DEFAULT_HUMIDITY = 25, 60  # used only when live weather is unavailable
 crop_recommendation_model_path = 'models/new_model.pkl'
 crop_recommendation_model = pickle.load(
     open(crop_recommendation_model_path, 'rb'))
@@ -79,65 +81,50 @@ disease_model.eval()
 
 
 def weather_fetch(city_name):
-    api_key = config.weather_api_key
-    base_url = "http://api.openweathermap.org/data/2.5/weather?"
-
-    complete_url = base_url + "appid=" + api_key + "&q=" + city_name
-
+    """Return (temperature in °C, humidity %) for a city, or None if live weather is unavailable."""
+    if not config.weather_api_key or not city_name:
+        return None
     try:
-        response = requests.get(complete_url)
+        response = requests.get(
+            "https://api.openweathermap.org/data/2.5/weather",
+            params={"q": city_name, "appid": config.weather_api_key},
+            timeout=5,
+        )
         x = response.json()
+    except (requests.RequestException, ValueError):
+        return None
+    if response.status_code != 200 or "main" not in x:
+        return None
+    return round(x["main"]["temp"] - 273.15, 2), x["main"]["humidity"]
 
-        if x.get("cod") != "404" and "main" in x:
-            y = x["main"]
-            temperature = round((y["temp"] - 273.15), 2)
-            humidity = y["humidity"]
-            return temperature, humidity
-        else:
-            return 25, 60
-
-    except:
-        return 25, 60
 
 def predict_image(img, model=disease_model):
-    """
-    Transforms image to tensor and predicts disease label
-    """
+    """Return (disease class, confidence %) for an uploaded leaf image.
 
+    The ResNet9 was trained on 256x256 images scaled to [0, 1] with no extra
+    normalization, so inference must use the same transform.
+    """
     transform = transforms.Compose([
-        transforms.Resize((256, 256)),  # fixed size
+        transforms.Resize(256),
+        transforms.CenterCrop(256),
         transforms.ToTensor(),
-        transforms.Normalize(           # VERY IMPORTANT
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        )
     ])
-
-    # Ensure image is RGB
     image = Image.open(io.BytesIO(img)).convert("RGB")
-
-    img_t = transform(image)
-    img_u = torch.unsqueeze(img_t, 0)
+    img_u = torch.unsqueeze(transform(image), 0)
 
     with torch.no_grad():
-        yb = model(img_u)
-        probs = torch.nn.functional.softmax(yb[0], dim=0)
+        probs = torch.nn.functional.softmax(model(img_u)[0], dim=0)
 
-    # Get highest probability class
     top_prob, top_idx = torch.max(probs, dim=0)
-
-    print("Prediction:", disease_classes[top_idx.item()])
-    print("Confidence:", round(top_prob.item()*100, 2), "%")
-
-    return disease_classes[top_idx.item()]
-
+    return disease_classes[top_idx.item()], round(top_prob.item() * 100, 1)
 
 
 app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = config.database_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SECRET_KEY"] = config.secret_key
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///database.db"
-app.config["SECRET_KEY"] = 'thisissecretkey'
 
 
 
@@ -263,56 +250,29 @@ def fertilizer_recommendation():
     title = '- Fertilizer Suggestion'
     return render_template('fertilizer.html', title=title)
 
-# @app.route('/disease-predict', methods=['GET', 'POST'])
-# @login_required
-# def disease_prediction():
-#     title = '- Disease Detection'
-#     return render_template('disease.html', title=title)
-
-import random
-
 @app.route('/disease-predict', methods=['GET', 'POST'])
 @login_required
 def disease_prediction():
     title = '- Disease Detection'
 
     if request.method == 'POST':
-        if 'file' not in request.files:
-            return redirect(request.url)
-
         file = request.files.get('file')
-
-        if not file:
+        if not file or not file.filename:
             return render_template('disease.html', title=title)
 
         try:
-            img = file.read()
+            disease, confidence = predict_image(file.read())
+        except (OSError, ValueError):
+            # Not a readable image file
+            return render_template('try_again.html', title=title)
 
-            # 🔥 SMART FALLBACK LOGIC
-            filename = file.filename.lower()
-
-            if "corn" in filename:
-                prediction_key = "Corn_(maize)___Common_rust_"
-            elif "potato" in filename:
-                prediction_key = "Potato___Late_blight"
-            elif "tomato" in filename:
-                prediction_key = "Tomato___Leaf_Mold"
-            elif "apple" in filename:
-                prediction_key = "Apple___Black_rot"
-            else:
-                prediction_key = random.choice(list(disease_dic.keys()))
-
-            prediction = Markup(str(disease_dic[prediction_key]))
-
-            return render_template(
-                'disease-result.html',
-                prediction=prediction,
-                title=title
-            )
-
-        except Exception as e:
-            print("Error:", e)
-            return "Error processing image"
+        prediction = Markup(str(disease_dic[disease]))
+        return render_template(
+            'disease-result.html',
+            prediction=prediction,
+            confidence=confidence,
+            title=title,
+        )
 
     return render_template('disease.html', title=title)
 
@@ -358,30 +318,32 @@ def crop_prediction():
         if None in [N, P, K, ph, rainfall]:
             return "❌ Invalid input. Use numbers or ranges like 10-20"
 
-        temperature, humidity = weather_fetch(city)
+        weather = weather_fetch(city)
+        if weather is None:
+            # No live weather (no API key, unknown city or network error):
+            # fall back to typical values and say so on the result page.
+            temperature, humidity = DEFAULT_TEMPERATURE, DEFAULT_HUMIDITY
+            weather_note = (f"Live weather for {city or 'your city'} was unavailable, so typical values "
+                            f"were used ({temperature}°C, {humidity}% humidity).")
+        else:
+            temperature, humidity = weather
+            weather_note = f"Live weather for {city}: {temperature}°C, {humidity}% humidity."
 
-        data = np.array([[N, P, K, temperature, humidity, ph, rainfall]])
+        data = pd.DataFrame([[N, P, K, temperature, humidity, ph, rainfall]],
+                            columns=CROP_FEATURES)
 
-        my_prediction = crop_recommendation_model.predict(data)
-        final_prediction = my_prediction[0]
-
-        try:
-            probs = crop_recommendation_model.predict_proba(data)[0]
-            confidence = round(max(probs) * 100, 2)
-
-            classes = crop_recommendation_model.classes_
-            top3_idx = probs.argsort()[-3:][::-1]
-            top3 = [(classes[i], round(probs[i]*100, 2)) for i in top3_idx]
-
-        except:
-            confidence = 85
-            top3 = [(final_prediction, confidence)]
+        probs = crop_recommendation_model.predict_proba(data)[0]
+        classes = crop_recommendation_model.classes_
+        top3_idx = probs.argsort()[-3:][::-1]
+        top3 = [(classes[i], round(probs[i] * 100, 2)) for i in top3_idx]
+        final_prediction, confidence = top3[0]
 
         return render_template(
             'crop-result.html',
             prediction=final_prediction,
             confidence=confidence,
             top3=top3,
+            weather_note=weather_note,
             title=title
         )
 
@@ -432,11 +394,6 @@ def fert_recommend():
     return render_template('fertilizer-result.html', recommendation=response, title=title)
 
 
-@app.route("/display")
-def querydisplay():
-    alltodo = ContactUs.query.all()
-    return render_template("display.html",alltodo=alltodo)
-
 @app.route("/AdminLogin", methods=['GET', 'POST'])
 def AdminLogin():
 
@@ -477,8 +434,9 @@ def reg():
     return render_template("reg.html", form=form)
 
 
-import webbrowser
+with app.app_context():
+    db.create_all()  # creates database.db and its tables on first run
+
 
 if __name__ == "__main__":
-    webbrowser.open("http://127.0.0.1:8000")
-    app.run(debug=True, port=8000)
+    app.run(debug=config.debug, port=8000)
