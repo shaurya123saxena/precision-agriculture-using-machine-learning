@@ -19,7 +19,10 @@ This project builds on [precision-agriculture-using-machine-learning](https://gi
 - **Disease detection fixed:** inference now uses the same preprocessing the ResNet9 was trained with, converts uploads to RGB, and shows the model's confidence. An unreadable file shows a friendly error instead of crashing.
 - **Weather made transparent:** if live weather is unavailable (no API key, unknown city or network error), the app uses typical values and says so on the results page.
 - **No secrets in the code:** the API key, Flask secret key and database URL come from environment variables. The database file is no longer tracked; the app creates it on first run.
-- Login is required for the crop recommendation page, and a broken `/display` route was removed.
+- **Per-user prediction history** (`/history`): every crop, fertilizer and disease result is saved to a `prediction` table with a `user_id` foreign key, and each user sees only their own rows, newest first, 10 per page.
+- **Access control fixed:** every prediction route requires login; the admin dashboard now requires an admin account (a normal user gets 403); only an existing admin can create another admin (previously anyone could, via `/reg`); and sessions record the role, so an admin session can never be loaded as the regular user with the same id.
+- **Tests** ([tests/test_access.py](tests/test_access.py)): 7 tests covering history isolation between users, login requirements and admin separation. Run `python -m unittest discover -s tests -v`.
+- A broken `/display` route was removed.
 
 ## Run it
 

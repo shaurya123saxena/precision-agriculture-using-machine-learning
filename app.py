@@ -1,6 +1,7 @@
 import string
 import bcrypt
-from flask import Flask, redirect, render_template, url_for, request, Markup
+from functools import wraps
+from flask import Flask, redirect, render_template, url_for, request, Markup, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin, login_user, LoginManager, login_required, logout_user, current_user
 from wtforms import StringField, PasswordField, SubmitField
@@ -135,18 +136,64 @@ login_manager.login_view = "login"
 
 
 @login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
+def load_user(session_id):
+    # Session ids carry the role ("user:3" / "admin:1") so an admin session can
+    # never be loaded as the regular user who happens to share the same numeric id.
+    role, _, raw_id = session_id.rpartition(":")
+    if not raw_id.isdigit():
+        return None
+    model = UserAdmin if role == "admin" else User
+    return model.query.get(int(raw_id))
 
 class User(db.Model,UserMixin):
     id = db.Column(db.Integer,primary_key=True)
     username = db.Column(db.String(20), nullable=False, unique=True)
     password = db.Column(db.String(80), nullable=False)
+    predictions = db.relationship("Prediction", backref="user", lazy="dynamic", cascade="all, delete-orphan")
+
+    def get_id(self):
+        return f"user:{self.id}"
 
 class UserAdmin(db.Model,UserMixin):
     id = db.Column(db.Integer,primary_key=True)
     username = db.Column(db.String(20), nullable=False, unique=True)
     password = db.Column(db.String(80), nullable=False)
+
+    def get_id(self):
+        return f"admin:{self.id}"
+
+class Prediction(db.Model):
+    """One crop, fertilizer or disease result, owned by the user who asked for it."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    prediction_type = db.Column(db.String(20), nullable=False)  # crop / fertilizer / disease
+    result = db.Column(db.String(120), nullable=False)
+    confidence = db.Column(db.Float)                              # percent, if the model gives one
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+def is_admin():
+    return current_user.is_authenticated and isinstance(current_user._get_current_object(), UserAdmin)
+
+
+def admin_required(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return login_manager.unauthorized()
+        if not is_admin():
+            abort(403)
+        return view(*args, **kwargs)
+    return wrapper
+
+
+def record_prediction(kind, result, confidence=None):
+    """Save a result to the signed-in user's history (admins don't have one)."""
+    if is_admin():
+        return
+    db.session.add(Prediction(user_id=current_user.id, prediction_type=kind, result=str(result)[:120],
+                              confidence=None if confidence is None else round(float(confidence), 2)))
+    db.session.commit()
 
 class RegisterForm(FlaskForm):
     username=StringField(validators=[InputRequired(),Length(min=5,max=20)],render_kw={"placeholder":"username"})
@@ -214,8 +261,22 @@ def login():
 @ app.route('/dashboard',methods=['GET', 'POST'])
 @login_required
 def dashboard():
+    if is_admin():
+        return redirect(url_for('admindashboard'))
     title = 'dashboard'
     return render_template('dashboard.html',title=title)
+
+@app.route('/history')
+@login_required
+def history():
+    if is_admin():
+        return redirect(url_for('admindashboard'))
+    page = request.args.get('page', 1, type=int)
+    # Only the signed-in user's own rows: the filter on user_id is the access control.
+    records = (Prediction.query.filter_by(user_id=current_user.id)
+               .order_by(Prediction.created_at.desc(), Prediction.id.desc())
+               .paginate(page=page, per_page=10, error_out=False))
+    return render_template('history.html', records=records, title='- Prediction History')
 
 @ app.route('/logout',methods=['GET', 'POST'])
 @login_required
@@ -266,6 +327,7 @@ def disease_prediction():
             # Not a readable image file
             return render_template('try_again.html', title=title)
 
+        record_prediction('disease', disease, confidence)
         prediction = Markup(str(disease_dic[disease]))
         return render_template(
             'disease-result.html',
@@ -337,6 +399,7 @@ def crop_prediction():
         top3_idx = probs.argsort()[-3:][::-1]
         top3 = [(classes[i], round(probs[i] * 100, 2)) for i in top3_idx]
         final_prediction, confidence = top3[0]
+        record_prediction('crop', final_prediction, confidence)
 
         return render_template(
             'crop-result.html',
@@ -348,11 +411,12 @@ def crop_prediction():
         )
 
 # render fertilizer recommendation result page
-
-# render fertilizer recommendation result page
+FERTILIZER_RESULT = {"NHigh": "nitrogen high", "Nlow": "nitrogen low", "PHigh": "phosphorus high",
+                     "Plow": "phosphorus low", "KHigh": "potassium high", "Klow": "potassium low"}
 
 
 @ app.route('/fertilizer-predict', methods=['POST'])
+@login_required
 def fert_recommend():
     title = '- Fertilizer Suggestion'
 
@@ -389,6 +453,7 @@ def fert_recommend():
         else:
             key = "Klow"
 
+    record_prediction('fertilizer', f"{crop_name}: {FERTILIZER_RESULT[key]}")
     response = Markup(str(fertilizer_dic[key]))
 
     return render_template('fertilizer-result.html', recommendation=response, title=title)
@@ -398,7 +463,7 @@ def fert_recommend():
 def AdminLogin():
 
     form = LoginForm()
-    if current_user.is_authenticated:
+    if is_admin():
          return redirect(url_for('admindashboard'))
 
     elif form.validate_on_submit():
@@ -414,7 +479,7 @@ def AdminLogin():
     # return render_template("adminlogin.html")
 
 @app.route("/admindashboard")
-@login_required
+@admin_required
 def admindashboard():
     alltodo = ContactUs.query.all()
     alluser = User.query.all()
@@ -422,6 +487,10 @@ def admindashboard():
 
 @app.route("/reg",methods=['GET', 'POST'])
 def reg():
+    # Anyone could create an admin account here before. Now only a signed-in admin can,
+    # except for the very first admin when none exists yet.
+    if UserAdmin.query.count() > 0 and not is_admin():
+        abort(403)
     form = RegisterForm()
 
     if form.validate_on_submit():
